@@ -55,10 +55,7 @@ def main():
         try:
             image = Image.open(file_path).convert("RGB")
             
-            # --- FITUR ANTI-STUCK (VRAM OVERFLOW PROTECTION) ---
-            # Jika gambar terlalu besar, RTX 4060 8GB akan meminjam RAM biasa (Shared Memory)
-            # yang membuat proses menjadi 50x lebih lambat (seperti stuck).
-            # Kita perkecil sedikit gambar awalnya agar pas di 8GB VRAM, toh AI akan membesarkannya 4x lipat.
+            #  FITUR ANTI-STUCK (VRAM OVERFLOW PROTECTION) 
             width, height = image.size
             if width * height > MAX_PIXELS:
                 ratio = (MAX_PIXELS / (width * height)) ** 0.5
