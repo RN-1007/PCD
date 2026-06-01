@@ -71,43 +71,45 @@ def perform_kmeans_clustering(image_lab: np.ndarray, k: int = 3) -> Tuple[np.nda
     
     return center, label, segmented_image
 
-def identify_tomato_cluster(center: np.ndarray, label: np.ndarray, image_shape: Tuple[int, int], color_threshold: float = 10.0) -> np.ndarray:
+def identify_tomato_cluster(center: np.ndarray, label: np.ndarray, image_shape: Tuple[int, int]) -> np.ndarray:
     """
-    Mengidentifikasi klaster yang berisi objek tomat berdasarkan jarak dari warna abu-abu.
-    Karena tomat merah menuju kuning, kita memilih klaster yang memiliki nilai krominansi
-    cukup jauh dari abu-abu (128, 128) dan memiliki komponen merah/kuning (a/b > 120).
+    Mengidentifikasi klaster yang berisi objek tomat.
+    Logika yang diperbarui (Lebih Tangguh untuk Latar Belakang Kompleks):
+    1. Daun hijau memiliki nilai 'a' < 128.
+    2. Tanah/Coklat memiliki nilai 'a' ~ 130 dan 'b' ~ 135.
+    3. Tomat merah memiliki nilai 'a' tinggi (> 135).
+    4. Tomat kuning/oranye memiliki nilai 'b' sangat tinggi (> 140) dan 'a' > 128 (bukan hijau).
 
     Args:
         center (np.ndarray): Pusat klaster dari K-Means. (Berisi komponen a dan b)
         label (np.ndarray): Label klaster tiap piksel.
         image_shape (Tuple[int, int]): Dimensi (tinggi, lebar) citra.
-        color_threshold (float): Batas toleransi jarak dari warna abu-abu. 
-                                 Semakin kecil, semakin banyak warna (termasuk kuning/pudar) yang masuk.
 
     Returns:
-        np.ndarray: Mask biner dari klaster yang teridentifikasi sebagai tomat (255) dan background (0).
+        np.ndarray: Mask biner.
     """
     label_reshaped = label.reshape(image_shape)
     mask = np.zeros(image_shape, dtype=np.uint8)
+    
+    a_channel_centers = center[:, 0]
+    
+    # Pastikan bagian yang paling merah dari gambar (nilai 'a' tertinggi) selalu terpilih
+    # Karena di alam, tomat biasanya objek paling merah.
+    max_a_idx = np.argmax(a_channel_centers)
     
     for i in range(len(center)):
         a_val = center[i, 0]
         b_val = center[i, 1]
         
-        # Jarak Euclidean dari warna abu-abu murni (128, 128)
-        dist_from_gray = np.sqrt((float(a_val) - 128)**2 + (float(b_val) - 128)**2)
+        # Kriteria warna tomat:
+        # - Merah yang kuat
+        is_red = a_val > 135
+        # - Kuning/Oranye yang kuat (b > 140), dan pastikan bukan daun hijau (a > 128)
+        is_yellow_orange = (a_val > 128) and (b_val > 140)
         
-        # Tomat merah/kuning cenderung memiliki a atau b yang lebih besar dari abu-abu
-        # Jika jaraknya melebihi threshold dan tidak mengarah ke warna dingin (biru/hijau), maka itu tomat
-        if dist_from_gray > color_threshold and (a_val > 120 or b_val > 120):
+        if is_red or is_yellow_orange or i == max_a_idx:
             mask[label_reshaped == i] = 255
             
-    # Fallback: Jika threshold terlalu ketat dan tidak ada yang terpilih, pilih yang paling merah ('a' tertinggi)
-    if np.max(mask) == 0:
-        a_channel_centers = center[:, 0]
-        tomato_cluster_idx = np.argmax(a_channel_centers)
-        mask[label_reshaped == tomato_cluster_idx] = 255
-    
     return mask
 
 def extract_object_with_mask(image_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
