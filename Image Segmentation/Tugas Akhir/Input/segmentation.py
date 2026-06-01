@@ -96,18 +96,22 @@ def identify_tomato_cluster(center: np.ndarray, label: np.ndarray, image_shape: 
     # Pastikan bagian yang paling merah dari gambar (nilai 'a' tertinggi) selalu terpilih
     # Karena di alam, tomat biasanya objek paling merah.
     max_a_idx = np.argmax(a_channel_centers)
+    max_a_val = a_channel_centers[max_a_idx]
     
     for i in range(len(center)):
         a_val = center[i, 0]
         b_val = center[i, 1]
         
-        # Kriteria warna tomat:
-        # - Merah yang kuat
-        is_red = a_val > 135
-        # - Kuning/Oranye yang kuat (b > 140), dan pastikan bukan daun hijau (a > 128)
-        is_yellow_orange = (a_val > 128) and (b_val > 140)
+        # Logika Dinamis Adaptif Relatif:
+        # 1. Pastikan bukan background/daun ('a' harus bernuansa kemerahan/hangat, a > 125)
+        # 2. Toleransi kedekatan dengan warna merah tertinggi yang ada di gambar ini (relatif)
+        is_warm = a_val > 125
+        is_close_to_peak = a_val > (max_a_val - 25) # Mentoleransi gradasi merah hingga 25 unit dari titik puncak
         
-        if is_red or is_yellow_orange or i == max_a_idx:
+        # 3. Atau jika sangat kuning (b > 135 dan a > 125)
+        is_yellow = (a_val > 125) and (b_val > 135)
+        
+        if (is_warm and is_close_to_peak) or is_yellow or i == max_a_idx:
             mask[label_reshaped == i] = 255
             
     return mask
@@ -192,8 +196,26 @@ def process_single_image(image_path: str, k: int, output_dir: str):
     
     # Operasi morfologi (opsional) untuk merapikan noise pada mask
     kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2) # Hapus titik-titik noise
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3) # Tutup lubang di dalam tomat
+    
+    # Filter contour spasial (Menghapus noise background terkecil dan mempertahankan objek besar / tomat)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        # Urutkan berdasarkan area terbesar
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        max_area = cv2.contourArea(contours[0])
+        
+        # Buat mask baru yang bersih
+        clean_mask = np.zeros_like(mask)
+        
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            # Jika objek setidaknya berukuran 10% dari objek terbesar, anggap itu tomat (bukan noise background)
+            if area > 0.1 * max_area:
+                cv2.drawContours(clean_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+                
+        mask = clean_mask
     
     extracted_image = extract_object_with_mask(image_rgb, mask)
     
@@ -219,8 +241,8 @@ def main():
     # Buat folder Output jika belum ada
     os.makedirs(output_dir, exist_ok=True)
     
-    # Parameter dinamis jumlah cluster (K)
-    k_clusters = 3
+    # Parameter dinamis jumlah cluster (K) dinaikkan ke 4 agar memisahkan gradasi lebih detail
+    k_clusters = 4
     
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp"}
     
