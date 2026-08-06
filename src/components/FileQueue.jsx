@@ -16,7 +16,7 @@ export default function FileQueue({ files, isConverted, isConverting, onRemoveFi
         if (item.status === 'converted' || isConverted) {
           statusBadge = (
             <span className="font-label text-label bg-green-100 text-green-800 px-2 py-1 rounded dark:bg-green-900/30 dark:text-green-400">
-              {item.percentSaved !== undefined ? `Saved ${item.percentSaved}%` : 'Success'}
+              Success
             </span>
           );
         } else if (item.status === 'converting' || isConverting) {

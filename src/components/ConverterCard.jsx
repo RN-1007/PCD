@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import Dropzone from './Dropzone';
 import FileQueue from './FileQueue';
-import { convertImageToWebP, formatBytes } from '../utils/converter';
+import { formatBytes } from '../utils/formatters';
+import { convertAndZipServer, createBatchRecord } from '../services/api';
 
 export default function ConverterCard({ onBatchCompleted }) {
   const [files, setFiles] = useState([]);
@@ -11,8 +12,6 @@ export default function ConverterCard({ onBatchCompleted }) {
   const [progress, setProgress] = useState(0);
   const [showSuccessAnim, setShowSuccessAnim] = useState(false);
   const [animOpacity, setAnimOpacity] = useState(false);
-  const [totalSavedFormatted, setTotalSavedFormatted] = useState('');
-  const [zipLoading, setZipLoading] = useState(false);
 
   const animationContainerRef = useRef(null);
 
@@ -61,126 +60,57 @@ export default function ConverterCard({ onBatchCompleted }) {
     }
   };
 
-  // Perform REAL Client-Side Canvas WebP Conversion
-  const handleConvert = async () => {
+  // Perform 100% Server-Side Flask Conversion (POST /api/convert-and-zip)
+  const handleConvertServer = async () => {
     if (files.length === 0) return;
 
     setIsConverting(true);
-    setProgress(0);
+    setProgress(30);
 
-    const convertedList = [];
-    let totalOriginalBytes = 0;
-    let totalConvertedBytes = 0;
-
-    for (let i = 0; i < files.length; i++) {
-      const item = files[i];
-      try {
-        const result = await convertImageToWebP(item.file, quality);
-        convertedList.push({
-          ...item,
-          ...result,
-          status: 'converted'
-        });
-        totalOriginalBytes += result.originalSizeBytes;
-        totalConvertedBytes += result.convertedSizeBytes;
-      } catch (err) {
-        console.error('Failed to convert image:', item.originalName, err);
-        convertedList.push({
-          ...item,
-          status: 'error'
-        });
-      }
-
-      const currentProgress = Math.round(((i + 1) / files.length) * 100);
-      setProgress(currentProgress);
-    }
-
-    setFiles(convertedList);
-    setIsConverting(false);
-    setIsConverted(true);
-
-    const totalSavedBytes = Math.max(0, totalOriginalBytes - totalConvertedBytes);
-    const savedStr = formatBytes(totalSavedBytes);
-    setTotalSavedFormatted(savedStr);
-
-    // Trigger success animations
-    setShowSuccessAnim(true);
-    setTimeout(() => setAnimOpacity(true), 10);
-    createParticles();
-
-    setTimeout(() => {
-      setAnimOpacity(false);
-      setTimeout(() => setShowSuccessAnim(false), 300);
-    }, 1200);
-
-    // Add to Recent Batches if callback provided
-    if (onBatchCompleted && convertedList.length > 0) {
-      onBatchCompleted({
-        id: `batch-${Date.now().toString(36)}`,
-        name: `Batch #${Math.floor(Math.random() * 900) + 100} - Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-        fileCount: convertedList.length,
-        savedSize: savedStr,
-        files: convertedList
-      });
-    }
-  };
-
-  // Backend ZIP download handler (sends request to backend API endpoint)
-  const handleDownloadZipBackend = async () => {
-    setZipLoading(true);
     try {
-      // Prepare converted files data or FormData for backend ZIP service
-      const formData = new FormData();
-      files.forEach((f) => {
-        if (f.convertedBlob) {
-          formData.append('files', f.convertedBlob, f.convertedFileName);
-        }
-      });
+      // Send original files to Flask API /api/convert-and-zip
+      setProgress(60);
+      await convertAndZipServer(files, quality);
+      setProgress(100);
 
-      // Send to backend API zip endpoint
-      const response = await fetch('/api/download-zip', {
-        method: 'POST',
-        body: formData
-      });
+      const convertedList = files.map((item) => ({
+        ...item,
+        status: 'converted'
+      }));
 
-      if (response.ok) {
-        const blob = await response.blob();
-        const downloadUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = `kompresin-batch-${Date.now()}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(downloadUrl);
-      } else {
-        // Fallback if backend API is not running yet
-        alert('Backend ZIP API endpoint (/api/download-zip) ready. Backend backend is not active yet, downloading individual files instead.');
-        files.forEach((f) => {
-          if (f.convertedUrl) {
-            const a = document.createElement('a');
-            a.href = f.convertedUrl;
-            a.download = f.convertedFileName;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-          }
-        });
+      setFiles(convertedList);
+      setIsConverted(true);
+
+      // Trigger success animations
+      setShowSuccessAnim(true);
+      setTimeout(() => setAnimOpacity(true), 10);
+      createParticles();
+
+      setTimeout(() => {
+        setAnimOpacity(false);
+        setTimeout(() => setShowSuccessAnim(false), 300);
+      }, 1200);
+
+      // Build batch payload matching OpenAPI Swagger spec
+      const batchId = `batch-${Date.now()}`;
+      const batchPayload = {
+        id: batchId,
+        filesCount: files.length,
+        totalSavedBytes: 0,
+        name: `Batch #${batchId.slice(-4)}`,
+        files: convertedList
+      };
+
+      // Save batch record to Flask backend API (POST /api/batches)
+      await createBatchRecord(batchPayload);
+
+      if (onBatchCompleted) {
+        onBatchCompleted(batchPayload);
       }
     } catch (err) {
-      console.warn('Backend ZIP server connection failed, falling back to individual download.', err);
-      files.forEach((f) => {
-        if (f.convertedUrl) {
-          const a = document.createElement('a');
-          a.href = f.convertedUrl;
-          a.download = f.convertedFileName;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        }
-      });
+      console.error('Server conversion error:', err);
     } finally {
-      setZipLoading(false);
+      setIsConverting(false);
     }
   };
 
@@ -189,7 +119,6 @@ export default function ConverterCard({ onBatchCompleted }) {
     setIsConverted(false);
     setIsConverting(false);
     setProgress(0);
-    setTotalSavedFormatted('');
   };
 
   return (
@@ -254,10 +183,9 @@ export default function ConverterCard({ onBatchCompleted }) {
           )}
 
           {/* Summary Banner after conversion */}
-          {isConverted && totalSavedFormatted && (
+          {isConverted && (
             <div className="bg-surface-container-low border border-outline-variant p-sm rounded-lg flex items-center justify-between text-body-sm">
-              <span className="text-on-surface font-medium">Conversion Complete!</span>
-              <span className="text-primary font-semibold">Total Saved: {totalSavedFormatted}</span>
+              <span className="text-on-surface font-medium">Conversion Complete! ZIP Downloaded.</span>
             </div>
           )}
 
@@ -266,39 +194,28 @@ export default function ConverterCard({ onBatchCompleted }) {
             {!isConverted ? (
               <button
                 type="button"
-                onClick={handleConvert}
+                onClick={handleConvertServer}
                 disabled={isConverting || files.length === 0}
                 className="w-full bg-primary text-on-primary font-label text-label py-sm rounded hover:opacity-90 transition-all duration-300 flex items-center justify-center gap-xs disabled:opacity-50 cursor-pointer"
               >
                 <span className={`material-symbols-outlined text-[18px] ${isConverting ? 'animate-spin' : ''}`}>
                   {isConverting ? 'progress_activity' : 'bolt'}
                 </span>
-                <span>{isConverting ? `Converting (${progress}%)...` : `Convert ${files.length} File${files.length > 1 ? 's' : ''} to WebP`}</span>
+                <span>
+                  {isConverting
+                    ? `Converting via Flask (${progress}%)...`
+                    : `Convert ${files.length} File${files.length > 1 ? 's' : ''} to WebP (ZIP)`}
+                </span>
               </button>
             ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={handleDownloadZipBackend}
-                  disabled={zipLoading}
-                  className="flex-1 bg-primary text-on-primary font-label text-label py-sm rounded hover:opacity-90 transition-all duration-300 flex items-center justify-center gap-xs cursor-pointer"
-                >
-                  <span className={`material-symbols-outlined text-[18px] ${zipLoading ? 'animate-spin' : ''}`}>
-                    {zipLoading ? 'progress_activity' : 'folder_zip'}
-                  </span>
-                  <span>{zipLoading ? 'Requesting ZIP...' : 'Download All (ZIP Backend)'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleReset}
-                  className="px-md bg-surface-container-high text-on-surface font-label text-label py-sm rounded hover:bg-surface-container-highest transition-colors flex items-center justify-center gap-xs cursor-pointer"
-                  title="Clear Queue"
-                >
-                  <span className="material-symbols-outlined text-[18px]">refresh</span>
-                  <span>New</span>
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={handleReset}
+                className="w-full bg-surface-container-high text-on-surface font-label text-label py-sm rounded hover:bg-surface-container-highest transition-colors flex items-center justify-center gap-xs cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[18px]">refresh</span>
+                <span>Convert More Files</span>
+              </button>
             )}
           </div>
         </div>

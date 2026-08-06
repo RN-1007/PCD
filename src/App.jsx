@@ -1,32 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import ConverterCard from './components/ConverterCard';
 import RecentBatches from './components/RecentBatches';
 import Footer from './components/Footer';
+import { fetchBatches, deleteBatchRecord } from './services/api';
 
 export default function App() {
-  const [batches, setBatches] = useState([
-    {
-      id: 'batch-demo-1',
-      name: 'Batch #042 - Today, 2:45 PM',
-      fileCount: 12,
-      savedSize: '4.2 MB'
-    },
-    {
-      id: 'batch-demo-2',
-      name: 'Batch #041 - Yesterday, 11:20 AM',
-      fileCount: 5,
-      savedSize: '1.8 MB'
+  const [batches, setBatches] = useState([]);
+
+  // Fetch batches from Flask backend on mount (GET /api/batches)
+  useEffect(() => {
+    async function loadBatches() {
+      const data = await fetchBatches();
+      if (Array.isArray(data)) {
+        setBatches(data);
+      }
     }
-  ]);
+    loadBatches();
+  }, []);
 
   const handleBatchCompleted = (newBatch) => {
     setBatches((prev) => [newBatch, ...prev]);
   };
 
-  const handleDeleteBatch = (batchId) => {
+  const handleDeleteBatch = async (batchId) => {
+    // Optimistic UI update
     setBatches((prev) => prev.filter((b) => b.id !== batchId));
+    // Sync deletion with Flask backend (DELETE /api/batches/{batch_id})
+    await deleteBatchRecord(batchId);
   };
 
   return (
